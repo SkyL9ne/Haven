@@ -29,7 +29,9 @@ Remote programs can interact with Android through standard terminal escape seque
 | 8 | Hyperlinks | `printf '\e]8;;https://example.com\aClick\e]8;;\a'` |
 | 9 | Notification | `printf '\e]9;Build complete\a'` |
 | 777 | Notification (with title) | `printf '\e]777;notify;CI;Pipeline green\a'` |
-| 7 | Working directory | `printf '\e]7;file:///home/user\a'` |
+| 7 | Working directory | ```bash
+printf '\e]7;file:///home/user\a'
+``` |
 
 Notifications appear as a toast in the foreground or as an Android notification in the background.
 
