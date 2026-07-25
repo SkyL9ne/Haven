@@ -1501,7 +1501,7 @@ internal class McpTools(
         ) { args -> createConnection(args) },
 
         "update_connection" to ToolHandler(
-            description = "Edit fields on an existing connection profile (load → change → save). Pass profileId (required) plus only the fields you want to change — anything omitted is left as-is. Common SSH-family fields: label, host, port, username, password (stored, mapped to the profile's transport), keyId, ignoreSavedKeys (force password-only auth), useMosh, forwardAgent, remoteCommand (SSH exec instead of a login shell; empty string clears) + requestPty. Desktop tunnels: vncSshForward + vncSshProfileId, rdpSshForward + rdpSshProfileId, spiceSshForward + spiceSshProfileId, smbSshForward + smbSshProfileId. Passwords are stored encrypted and never echoed back. For routing/proxy use set_profile_routing; for port-knock/SPA use set_port_knock/set_spa. Returns the updated profile (secrets redacted).",
+            description = "Edit fields on an existing connection profile (load → change → save). Pass profileId (required) plus only the fields you want to change — anything omitted is left as-is. Common SSH-family fields: label, host, port, username, password (stored, mapped to the profile's transport), keyId, ignoreSavedKeys (force password-only auth), useMosh, forwardAgent, remoteCommand (SSH exec instead of a login shell; empty string clears) + requestPty. Desktop tunnels: vncSshForward + vncSshProfileId, rdpSshForward + rdpSshProfileId, spiceSshForward + spiceSshProfileId, smbSshForward + smbSshProfileId. USB/IP auto-forward: usbForwardVidPid (export a phone-attached USB device to this host on every connect). Passwords are stored encrypted and never echoed back. For routing/proxy use set_profile_routing; for port-knock/SPA use set_port_knock/set_spa. Returns the updated profile (secrets redacted).",
             inputSchema = objectSchema {
                 string("profileId", "Profile id from list_connections.", required = true)
                 string("label", "New user-facing label.")
@@ -1525,6 +1525,7 @@ internal class McpTools(
                 string("smbSshProfileId", "SMB only: SSH profile id to tunnel through. Empty string clears.")
                 boolean("spiceSshForward", "SPICE only: tunnel through a saved SSH profile (set spiceSshProfileId).")
                 string("spiceSshProfileId", "SPICE only: SSH profile id to tunnel through. Empty string clears.")
+                string("usbForwardVidPid", "SSH only: VID:PID of a phone-attached USB device (e.g. '1050:0406' — see list_usb_devices) to auto-export over USB/IP whenever this profile connects. Haven opens the device, starts the usbip server on loopback, adds the remote forward, and runs `usbip attach` on the host, re-attaching after a tunnel drop. Empty string clears (no auto-forward).")
             },
             consentLevel = ConsentLevel.EVERY_CALL,
             summarise = { args ->
@@ -2009,6 +2010,7 @@ internal class McpTools(
             put("requestPty", p.requestPty)
         }
         if (p.useEternalTerminal) put("useEternalTerminal", true)
+        if (!p.usbForwardVidPid.isNullOrBlank()) put("usbForwardVidPid", p.usbForwardVidPid)
         // VNC-specific fields
         if (p.vncPort != null) put("vncPort", p.vncPort)
         if (!p.vncUsername.isNullOrEmpty()) put("vncUsername", p.vncUsername)
@@ -5602,6 +5604,17 @@ internal class McpTools(
             }
         }
 
+        // A malformed VID:PID would never match a live device, and the auto-forward
+        // would just log "no device attached" on every connect — fail here instead.
+        if (args.has("usbForwardVidPid")) {
+            val vidPid = args.optString("usbForwardVidPid").ifBlank { null }
+            if (vidPid != null && !Regex("^[0-9a-fA-F]{4}:[0-9a-fA-F]{4}$").matches(vidPid)) {
+                throw IllegalArgumentException(
+                    "usbForwardVidPid must be VID:PID hex (e.g. 1050:0406), got \"$vidPid\"",
+                )
+            }
+        }
+
         // Password maps to the transport-specific column.
         val newPassword: (current: String?) -> String? = { current ->
             if (args.has("password")) args.optString("password").ifBlank { null } else current
@@ -5643,6 +5656,11 @@ internal class McpTools(
             smbSshProfileId = str("smbSshProfileId", existing.smbSshProfileId),
             spiceSshForward = bool("spiceSshForward", existing.spiceSshForward),
             spiceSshProfileId = str("spiceSshProfileId", existing.spiceSshProfileId),
+            usbForwardVidPid = if (existing.connectionType == "SSH") {
+                str("usbForwardVidPid", existing.usbForwardVidPid)
+            } else {
+                existing.usbForwardVidPid
+            },
         )
         connectionRepository.save(updated)
         return profileToJson(updated)

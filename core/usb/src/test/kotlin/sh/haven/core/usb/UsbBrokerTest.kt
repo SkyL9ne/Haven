@@ -236,6 +236,58 @@ class UsbBrokerTest {
     }
 
     @Test
+    fun `an interface-recipient control transfer claims that interface first`() {
+        // Regression for FIDO-over-USB/IP: usbhid's GET_DESCRIPTOR(REPORT) is an
+        // interface-recipient control request (bmRequestType 0x81). Android only
+        // routes those to a *claimed* interface — without the claim it stalls, we
+        // return -EPIPE, and the remote usbhid fails "can't add hid device: -32"
+        // (no hidraw ⇒ FIDO unusable). wIndex low byte selects the interface.
+        val ep = endpoint(0x84, UsbConstants.USB_DIR_IN, UsbConstants.USB_ENDPOINT_XFER_INT)
+        val if0 = iface(0, UsbConstants.USB_CLASS_HID, listOf(ep))
+        val dev = device("/dev/bus/usb/001/009", 0x1050, 0x0406, listOf(if0))
+        val conn: UsbDeviceConnection = mockk {
+            every { claimInterface(any(), any()) } returns true
+            every { controlTransfer(any(), any(), any(), any(), any(), any(), any()) } returns 0
+        }
+        val usb: UsbManager = mockk {
+            every { deviceList } returns hashMapOf(dev.deviceName to dev)
+            every { hasPermission(dev) } returns true
+            every { openDevice(dev) } returns conn
+        }
+        val broker = broker(usb)
+        runBlocking { broker.openDevice(dev.deviceName) }
+
+        // GET_DESCRIPTOR(REPORT) on interface 0: rt=0x81, req=0x06, wValue=0x2200.
+        broker.controlTransfer(dev.deviceName, 0x81, 0x06, 0x2200, 0, null, 64, 1000)
+
+        verify { conn.claimInterface(if0, true) }
+    }
+
+    @Test
+    fun `a device-recipient control transfer claims no interface`() {
+        // GET_DESCRIPTOR(DEVICE/CONFIG) is device-recipient (rt=0x80); it must go
+        // out on ep0 without claiming anything, or config enumeration would stall.
+        val ep = endpoint(0x84, UsbConstants.USB_DIR_IN, UsbConstants.USB_ENDPOINT_XFER_INT)
+        val if0 = iface(0, UsbConstants.USB_CLASS_HID, listOf(ep))
+        val dev = device("/dev/bus/usb/001/010", 0x1050, 0x0406, listOf(if0))
+        val conn: UsbDeviceConnection = mockk {
+            every { claimInterface(any(), any()) } returns true
+            every { controlTransfer(any(), any(), any(), any(), any(), any(), any()) } returns 0
+        }
+        val usb: UsbManager = mockk {
+            every { deviceList } returns hashMapOf(dev.deviceName to dev)
+            every { hasPermission(dev) } returns true
+            every { openDevice(dev) } returns conn
+        }
+        val broker = broker(usb)
+        runBlocking { broker.openDevice(dev.deviceName) }
+
+        broker.controlTransfer(dev.deviceName, 0x80, 0x06, 0x0200, 0, null, 64, 1000)
+
+        verify(exactly = 0) { conn.claimInterface(any(), any()) }
+    }
+
+    @Test
     fun `transfer result equality is content-based`() {
         val a = TransferResult(3, byteArrayOf(1, 2, 3))
         val b = TransferResult(3, byteArrayOf(1, 2, 3))

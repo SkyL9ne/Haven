@@ -1,2 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest />
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!--
+      ProotDns.systemNameservers() reads the active network's resolvers through
+      ConnectivityManager to seed the guest's /etc/resolv.conf (#446). Declared
+      here so lint sees it when it analyses this library in isolation; the app
+      module already requests it, so the merged permission set is unchanged.
+    -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+</manifest>

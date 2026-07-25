@@ -279,6 +279,13 @@ class UsbBroker @Inject constructor(
         // the key, so the export isn't transferring on the shared endpoints at the
         // same time (#FIDO-storm contention).
         accessGate.awaitClear(deviceName, EXPORT_YIELD_MS)
+        // An interface-recipient request (bmRequestType bits 0-4 == 1) — e.g. the
+        // HID GET_DESCRIPTOR(REPORT) that usbhid issues at probe time — only
+        // succeeds on Android once that interface is claimed. Without the claim the
+        // report-descriptor read stalls, we surface it as -EPIPE, and the remote
+        // usbhid fails with "can't add hid device: -32" (no hidraw ⇒ FIDO unusable).
+        // Mirrors bulkTransfer's lazy per-interface claim; wIndex low byte = iface#.
+        if (requestType and 0x1F == 0x01) claimInterfaceByNumber(handle, index and 0xFF)
         val isIn = (requestType and UsbConstants.USB_DIR_IN) != 0
         val buffer = if (isIn) ByteArray(length) else (data ?: ByteArray(0))
         // A single UsbDeviceConnection has no built-in thread safety — a
@@ -379,6 +386,26 @@ class UsbBroker @Inject constructor(
 
     private fun indexOfInterfaceId(device: UsbDevice, id: Int): Int =
         (0 until device.interfaceCount).first { device.getInterface(it).id == id }
+
+    /**
+     * Claim (once) the interface whose bInterfaceNumber is [number], mirroring
+     * [bulkTransfer]'s lazy claim. Needed before an interface-recipient control
+     * transfer (Android routes those to a claimed interface only). No-op if the
+     * device has no such interface — an unknown wIndex shouldn't fail the request.
+     */
+    private fun claimInterfaceByNumber(handle: OpenHandle, number: Int) {
+        val iface = (0 until handle.device.interfaceCount)
+            .map { handle.device.getInterface(it) }
+            .firstOrNull { it.id == number } ?: return
+        synchronized(handle.connection) {
+            if (handle.claimedInterfaces.add(iface.id)) {
+                if (!handle.connection.claimInterface(iface, true)) {
+                    handle.claimedInterfaces.remove(iface.id)
+                    throw IOException("Failed to claim interface ${iface.id} for control transfer")
+                }
+            }
+        }
+    }
 
     companion object {
         private const val TAG = "UsbBroker"
